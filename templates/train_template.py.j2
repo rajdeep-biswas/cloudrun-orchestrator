@@ -1,0 +1,54 @@
+from prophet import Prophet
+from google.cloud import bigquery, storage
+import pandas as pd, pickle, io
+from datetime import datetime
+import numpy as np
+np.float_ = np.float64
+
+PROJECT_ID = "dev-poc-429118"
+BQ_TABLE = "dev-poc-429118.aa_genai.call-duration-aphw-aug-sep"
+BUCKET_NAME = "aphw-prophet-models"
+
+bq_client = bigquery.Client(project=PROJECT_ID)
+
+# === Query only timestamp and target column ===
+query = f"""
+SELECT {{ timestamp_column }}, {{ output_column }}, {% if input_columns %}{{ input_columns | join(', ') }}{% endif %}
+FROM `{{ BQ_TABLE }}`
+WHERE {{ timestamp_column }} BETWEEN '{{ begin_date }}' AND '{{ end_date }}'
+"""
+df = bq_client.query(query).to_dataframe()
+
+# === Rename for Prophet ===
+df = df.rename(columns={
+    "{{ timestamp_column }}": "ds",
+    "{{ output_column }}": "y"
+})
+df["ds"] = pd.to_datetime(df["ds"])
+
+# === Create Prophet model ===
+model = Prophet(daily_seasonality=True, interval_width={{ interval_width }})
+
+# === Add regressors dynamically ===
+{% for col in input_columns %}
+model.add_regressor("{{ col }}")
+{% endfor %}
+
+# === Fit model ===
+model.fit(df)
+
+# === Forecast on training timestamps ===
+forecast = model.predict(df[["ds"] + [{% for col in input_columns %}"{{ col }}"{% if not loop.last %}, {% endif %}{% endfor %}]])
+
+# === Inflate upper bound for anomaly detection ===
+forecast["yhat_upper"] = forecast["yhat"] + {{ scaling_factor }} * (forecast["yhat_upper"] - forecast["yhat"])
+
+# === Serialize model ===
+model_bytes = io.BytesIO()
+pickle.dump(model, model_bytes)
+model_bytes.seek(0)
+
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+storage.Client().bucket(BUCKET_NAME).blob(f"dynamic_models/{{ timestamp }}.pkl").upload_from_file(model_bytes)
+
+print("✅ Model trained and uploaded successfully")
