@@ -1,20 +1,23 @@
+import numpy as np
+# Ensure Prophet sees np.float_ in NumPy 2.x environments
+np.float_ = np.float64
 from prophet import Prophet
 from google.cloud import bigquery, storage
 import pandas as pd, pickle, io
 from datetime import datetime
-import numpy as np
-np.float_ = np.float64
 
-PROJECT_ID = "dev-poc-429118"
-BQ_TABLE = "dev-poc-429118.aa_genai.call-duration-aphw-aug-sep"
-BUCKET_NAME = "aphw-prophet-models"
+# Values provided by the orchestrator at render time
+PROJECT_ID = "{{ project_id }}"
+BQ_TABLE = "{{ bq_table }}"
+BUCKET_NAME = "{{ bucket_name }}"
+MODEL_BLOB_NAME = "{{ model_blob_name }}"  # e.g., dynamic_models/model_20250101_120000.pkl
 
 bq_client = bigquery.Client(project=PROJECT_ID)
 
 # === Query only timestamp and target column ===
 query = f"""
-SELECT {{ timestamp_column }}, {{ output_column }}, {% if input_columns %}{{ input_columns | join(', ') }}{% endif %}
-FROM `{{ BQ_TABLE }}`
+SELECT {{ timestamp_column }}, {{ output_column }}{% if input_columns and input_columns|length > 0 %}, {{ input_columns | join(', ') }}{% endif %}
+FROM `{{ bq_table }}`
 WHERE {{ timestamp_column }} BETWEEN '{{ begin_date }}' AND '{{ end_date }}'
 """
 df = bq_client.query(query).to_dataframe()
@@ -24,7 +27,18 @@ df = df.rename(columns={
     "{{ timestamp_column }}": "ds",
     "{{ output_column }}": "y"
 })
-df["ds"] = pd.to_datetime(df["ds"])
+df["ds"] = pd.to_datetime(df["ds"], utc=False)
+# Ensure Prophet gets tz-naive timestamps
+try:
+    # If tz-aware, convert to naive
+    if getattr(df["ds"].dt, "tz", None) is not None:
+        try:
+            df["ds"] = df["ds"].dt.tz_convert(None)
+        except Exception:
+            df["ds"] = df["ds"].dt.tz_localize(None)
+except Exception:
+    # Fallback: force naive
+    df["ds"] = pd.to_datetime(df["ds"]).dt.tz_localize(None)
 
 # === Create Prophet model ===
 model = Prophet(daily_seasonality=True, interval_width={{ interval_width }})
@@ -48,7 +62,6 @@ model_bytes = io.BytesIO()
 pickle.dump(model, model_bytes)
 model_bytes.seek(0)
 
-timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-storage.Client().bucket(BUCKET_NAME).blob(f"dynamic_models/{{ timestamp }}.pkl").upload_from_file(model_bytes)
+storage.Client().bucket(BUCKET_NAME).blob(MODEL_BLOB_NAME).upload_from_file(model_bytes)
 
 print("✅ Model trained and uploaded successfully")

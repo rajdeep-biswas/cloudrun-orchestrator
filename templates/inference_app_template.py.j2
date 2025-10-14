@@ -1,0 +1,73 @@
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from google.cloud import bigquery, storage
+import pandas as pd
+import pickle
+import io
+
+app = FastAPI(title="Prophet Inference Server")
+
+# Render-time constants
+PROJECT_ID = "{{ project_id }}"
+BQ_TABLE = "{{ bq_table }}"
+BUCKET_NAME = "{{ bucket_name }}"
+MODEL_BLOB_NAME = "{{ model_blob_name }}"
+TIMESTAMP_COLUMN = "{{ timestamp_column }}"
+OUTPUT_COLUMN = "{{ output_column }}"
+INPUT_COLUMNS = {{ input_columns | tojson }}
+
+_model = None
+_bq = bigquery.Client(project=PROJECT_ID)
+_storage = storage.Client()
+
+def _load_model():
+    global _model
+    if _model is not None:
+        return _model
+    bucket = _storage.bucket(BUCKET_NAME)
+    blob = bucket.blob(MODEL_BLOB_NAME)
+    data = blob.download_as_bytes()
+    _model = pickle.loads(data)
+    return _model
+
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
+@app.post("/predict")
+async def predict(request: Request):
+    try:
+        payload = await request.json()
+        begin_date = payload.get("begin_date")
+        end_date = payload.get("end_date")
+        # TODO inferencing shouldn't need begin and end dates
+        if not begin_date or not end_date:
+            return JSONResponse({"error": "begin_date and end_date required"}, status_code=400)
+
+        # TODO inferencing shouldn't query BigQuery again, just use the `instances` field received in the JSON payload
+        # Query data for the given window
+        query = f"""
+        SELECT {TIMESTAMP_COLUMN}, {OUTPUT_COLUMN}{', ' + ', '.join(INPUT_COLUMNS) if INPUT_COLUMNS else ''}
+        FROM `{BQ_TABLE}`
+        WHERE {TIMESTAMP_COLUMN} BETWEEN '{begin_date}' AND '{end_date}'
+        """
+        df = _bq.query(query).to_dataframe()
+        if df.empty:
+            return {"predictions": [], "message": "No data for given range"}
+
+        df = df.rename(columns={TIMESTAMP_COLUMN: "ds", OUTPUT_COLUMN: "y"})
+        df["ds"] = pd.to_datetime(df["ds"])
+
+        model = _load_model()
+        regressors = INPUT_COLUMNS or []
+        pred_df = df[["ds"] + regressors] if regressors else df[["ds"]]
+        forecast = model.predict(pred_df)
+
+        # Return only essential columns
+        result = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+        return {"predictions": result.to_dict(orient="records")}
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
