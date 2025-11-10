@@ -1,0 +1,19 @@
+# Core Prophet dependencies (from templates)
+cmdstanpy==1.2.5
+prophet
+pandas==2.3.2
+numpy==2.3.2
+
+# Google Cloud dependencies
+google-cloud-bigquery
+google-cloud-storage
+google-cloud
+db-dtypes
+
+# FastAPI for inference server
+fastapi
+uvicorn
+
+# Additional utilities
+pickle5; python_version < "3.8"
+

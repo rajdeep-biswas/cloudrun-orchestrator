@@ -1,0 +1,18 @@
+{
+  "model_blob_name": "dynamic_models/model_20251110_235550.pkl",
+  "gcs_path": "gs://aphw-prophet-models/dynamic_models/model_20251110_235550.pkl",
+  "bucket_name": "aphw-prophet-models",
+  "timestamp_column": "call_start_time_est",
+  "output_column": "call_duration",
+  "input_columns": [
+    "dnis",
+    "customer_speaking_duration"
+  ],
+  "trained_at": "2025-11-10T23:56:01.403741",
+  "training_config": {
+    "begin_date": "2025-08-01",
+    "end_date": "2025-09-01",
+    "interval_width": 0.9,
+    "scaling_factor": 2.2
+  }
+}
