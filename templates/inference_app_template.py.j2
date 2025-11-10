@@ -63,7 +63,17 @@ async def predict(request: Request):
 
         # Return only essential columns
         result = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
-        result["ds"] = result["ds"].dt.isoformat()
+        
+        # Calculate anomaly flag if output_column (actual value) is present
+        if OUTPUT_COLUMN in df.columns:
+            actual_values = df[OUTPUT_COLUMN].reset_index(drop=True)
+            # Anomaly: actual value is outside the prediction interval
+            result["is_anomaly"] = (actual_values < result["yhat_lower"]) | (actual_values > result["yhat_upper"])
+        else:
+            # If no actual values, set is_anomaly to False
+            result["is_anomaly"] = False
+        
+        result["ds"] = result["ds"].apply(lambda x: x.isoformat() if pd.notna(x) else None)
 
         # Merge back any non-feature columns (e.g., identifiers) from original payload
         if original_payload_columns:
