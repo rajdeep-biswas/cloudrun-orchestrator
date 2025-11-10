@@ -1,3 +1,4 @@
+cmdstanpy==1.2.5
 prophet==1.1.4
 pandas==2.3.2
 numpy==2.3.2
