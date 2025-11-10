@@ -129,7 +129,10 @@ def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_
     train_workdir = gen_artifacts["workdir"]
     train_gcs_source_uri = gen_artifacts["gcs_source_uri"]
     model_blob_name = gen_artifacts["model_blob_name"]
-    generated_files = gen_artifacts["generated_files"]
+    
+    # Convert input_columns list to CSV string
+    input_cols_list = payload.get("input_columns", [])
+    input_columns_csv = ",".join(input_cols_list) if isinstance(input_cols_list, list) else str(input_cols_list)
 
     row = {
         "run_id": run_id,
@@ -141,14 +144,13 @@ def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_
         "error": None,
         "bq_table": payload.get("bq_table"),
         "output_column": payload.get("output_column"),
-        "input_columns": payload.get("input_columns"),
+        "input_columns": input_columns_csv,  # CSV string
         "timestamp_column": payload.get("timestamp_column"),
         "begin_date": payload.get("begin_date"),
         "end_date": payload.get("end_date"),
         "interval_width": payload.get("interval_width"),
         "scaling_factor": payload.get("scaling_factor"),
         "train_workdir": train_workdir,
-        "train_generated_files": generated_files,
         "train_gcs_source_uri": train_gcs_source_uri,
         "model_blob_bucket": payload.get("bucket_name"),
         "model_blob_name": model_blob_name,
