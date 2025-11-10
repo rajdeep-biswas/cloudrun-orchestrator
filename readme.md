@@ -1,2 +1,2 @@
 # Run the fastapi application
-`uvicorn app:app --reload --host 0.0.0.0 --port 8080`
+`uvicorn pipeline.build_and_deploy:app --reload --host 0.0.0.0 --port 8080`
