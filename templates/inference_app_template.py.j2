@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from google.cloud import bigquery, storage
+from google.cloud import storage
 import pandas as pd
 import pickle
 import io
@@ -8,8 +8,6 @@ import io
 app = FastAPI(title="Prophet Inference Server")
 
 # Render-time constants
-PROJECT_ID = "{{ project_id }}"
-BQ_TABLE = "{{ bq_table }}"
 BUCKET_NAME = "{{ bucket_name }}"
 MODEL_BLOB_NAME = "{{ model_blob_name }}"
 TIMESTAMP_COLUMN = "{{ timestamp_column }}"
@@ -17,7 +15,6 @@ OUTPUT_COLUMN = "{{ output_column }}"
 INPUT_COLUMNS = {{ input_columns | tojson }}
 
 _model = None
-_bq = bigquery.Client(project=PROJECT_ID)
 _storage = storage.Client()
 
 def _load_model():
@@ -38,33 +35,40 @@ def health():
 async def predict(request: Request):
     try:
         payload = await request.json()
-        begin_date = payload.get("begin_date")
-        end_date = payload.get("end_date")
-        # TODO inferencing shouldn't need begin and end dates
-        if not begin_date or not end_date:
-            return JSONResponse({"error": "begin_date and end_date required"}, status_code=400)
+        instances = payload.get("instances")
+        if not instances:
+            return JSONResponse({"error": "`instances` array required for prediction"}, status_code=400)
 
-        # TODO inferencing shouldn't query BigQuery again, just use the `instances` field received in the JSON payload
-        # Query data for the given window
-        query = f"""
-        SELECT {TIMESTAMP_COLUMN}, {OUTPUT_COLUMN}{', ' + ', '.join(INPUT_COLUMNS) if INPUT_COLUMNS else ''}
-        FROM `{BQ_TABLE}`
-        WHERE {TIMESTAMP_COLUMN} BETWEEN '{begin_date}' AND '{end_date}'
-        """
-        df = _bq.query(query).to_dataframe()
+        df = pd.DataFrame(instances)
         if df.empty:
-            return {"predictions": [], "message": "No data for given range"}
+            return {"predictions": [], "message": "No instances provided"}
 
-        df = df.rename(columns={TIMESTAMP_COLUMN: "ds", OUTPUT_COLUMN: "y"})
+        if TIMESTAMP_COLUMN not in df.columns:
+            return JSONResponse({"error": f"`{TIMESTAMP_COLUMN}` field missing in instances"}, status_code=400)
+
+        # Ensure all expected regressors are present
+        regressors = INPUT_COLUMNS or []
+        missing_regressors = [col for col in regressors if col not in df.columns]
+        if missing_regressors:
+            return JSONResponse({"error": f"Missing regressor fields: {missing_regressors}"}, status_code=400)
+
+        original_payload_columns = [col for col in df.columns if col not in regressors + [TIMESTAMP_COLUMN]]
+
+        df = df.rename(columns={TIMESTAMP_COLUMN: "ds"})
         df["ds"] = pd.to_datetime(df["ds"])
 
         model = _load_model()
-        regressors = INPUT_COLUMNS or []
         pred_df = df[["ds"] + regressors] if regressors else df[["ds"]]
         forecast = model.predict(pred_df)
 
         # Return only essential columns
         result = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+        result["ds"] = result["ds"].dt.isoformat()
+
+        # Merge back any non-feature columns (e.g., identifiers) from original payload
+        if original_payload_columns:
+            result[original_payload_columns] = df[original_payload_columns].reset_index(drop=True)
+
         return {"predictions": result.to_dict(orient="records")}
 
     except Exception as e:
