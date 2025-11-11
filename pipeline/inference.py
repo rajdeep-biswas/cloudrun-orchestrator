@@ -4,12 +4,14 @@ import pandas as pd
 import asyncio
 from datetime import datetime, date
 from fastapi import FastAPI, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from google.cloud import bigquery
 from google.auth import default
 from google.auth.transport.requests import Request as AuthRequest
 
 app = FastAPI(title="Prophet Inference")
+router = APIRouter()
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -40,12 +42,12 @@ def _to_json_serializable(value):
 PROJECT_ID = "dev-poc-429118"
 MODEL_REGISTRY_TABLE = "dev-poc-429118.aa_genai.prophet_model_registry"
 
-@app.get("/")
+@router.get("/")
 def health_check():
     log_info("🦄✨ Inference service health check — service is up!")
     return {"status": "ok", "service": "inference"}
 
-@app.post("/inference")
+@router.post("/inference")
 async def inference(request: Request):
     """
     Inference endpoint that:
@@ -306,3 +308,4 @@ async def inference(request: Request):
         log_info(f"Traceback: {traceback.format_exc()}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
+app.include_router(router)

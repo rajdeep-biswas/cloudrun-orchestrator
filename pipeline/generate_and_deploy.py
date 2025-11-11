@@ -6,12 +6,14 @@ import zipfile
 from datetime import datetime
 import uuid
 from fastapi import FastAPI, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from jinja2 import Environment, FileSystemLoader
 from google.cloud import bigquery
 from google.cloud import storage
 
 app = FastAPI(title="Prophet Orchestrator")
+router = APIRouter()
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -175,12 +177,12 @@ def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_
     log_info("📊 Metadata stored in BigQuery ✅")
 
 # ================== API ==================
-@app.get("/")
+@router.get("/")
 def health_check():
     log_info("🦄✨ Health check hit — service is up!")
     return {"status": "ok", "phase": "full-pipeline"}
 
-@app.post("/generate_and_deploy")
+@router.post("/generate_and_deploy")
 async def generate_and_deploy(request: Request):
     """
     Single-call endpoint that:
@@ -393,3 +395,5 @@ async def generate_and_deploy(request: Request):
     except Exception as e:
         log_info(f"🔥 Error during /generate_and_deploy: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+app.include_router(router)
