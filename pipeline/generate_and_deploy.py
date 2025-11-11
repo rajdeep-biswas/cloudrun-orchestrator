@@ -140,6 +140,8 @@ def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_
         "region": REGION,
         "created_at": created_at,
         "created_by": payload.get("created_by"),
+        "configuration_name": payload.get("configuration_name"),
+        "model_description": payload.get("model_description"),
         "status": "success",
         "error": None,
         "bq_table": payload.get("bq_table"),
@@ -203,6 +205,8 @@ async def generate_and_deploy(request: Request):
             "project_id",
             "bq_table",
             "bucket_name",
+            "configuration_name",
+            "model_description",
         ]
         missing = [k for k in required_keys if k not in payload]
         if missing:
