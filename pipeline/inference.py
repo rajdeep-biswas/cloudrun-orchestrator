@@ -10,6 +10,10 @@ from google.cloud import bigquery
 from google.auth import default
 from google.auth.transport.requests import Request as AuthRequest
 
+from google.oauth2 import service_account
+import google.auth
+import os
+
 app = FastAPI(title="Prophet Inference")
 router = APIRouter()
 
@@ -41,6 +45,21 @@ def _to_json_serializable(value):
 # === Config ===
 PROJECT_ID = "dev-poc-429118"
 MODEL_REGISTRY_TABLE = "dev-poc-429118.aa_genai.prophet_model_registry"
+
+# Override default credentials with proper scoped service account
+key_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if key_path:
+    credentials = service_account.Credentials.from_service_account_file(
+        key_path,
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    # Force refresh to ensure we get an access token
+    import google.auth.transport.requests
+    credentials.refresh(google.auth.transport.requests.Request())
+    print("✅ Loaded service account credentials with access token.")
+else:
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    print("✅ Using default application credentials.")
 
 @router.get("/")
 def health_check():
