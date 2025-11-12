@@ -4,6 +4,7 @@ jinja2
 google-cloud-bigquery
 google-cloud-storage
 google-cloud-build>=3.0.0
+google-cloud-aiplatform>=1.38.0
 httpx
 pandas
 google-auth
