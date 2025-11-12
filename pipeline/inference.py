@@ -56,10 +56,10 @@ if key_path:
     # Force refresh to ensure we get an access token
     import google.auth.transport.requests
     credentials.refresh(google.auth.transport.requests.Request())
-    print("✅ Loaded service account credentials with access token.")
+    log_info("✅ Loaded service account credentials with access token.")
 else:
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    print("✅ Using default application credentials.")
+    log_info("✅ Using default application credentials.")
 
 @router.get("/")
 def health_check():
