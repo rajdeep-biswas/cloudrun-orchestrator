@@ -14,6 +14,10 @@ from google.cloud import aiplatform
 from google.cloud.aiplatform import models
 from google.cloud.devtools import cloudbuild_v1
 
+from google.oauth2 import service_account
+import google.auth
+import os
+
 
 app = FastAPI(title="Prophet Orchestrator")
 router = APIRouter()
@@ -37,6 +41,21 @@ PROJECT_ID = "dev-poc-429118"
 REGION = "us-central1"
 GCS_TEMP_BUCKET = "prophet-temp-bucket"  # pre-created bucket for temporary workdirs
 MODEL_REGISTRY_TABLE = "dev-poc-429118.aa_genai.prophet_model_registry"
+
+# Override default credentials with proper scoped service account
+key_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if key_path:
+    credentials = service_account.Credentials.from_service_account_file(
+        key_path,
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    # Force refresh to ensure we get an access token
+    import google.auth.transport.requests
+    credentials.refresh(google.auth.transport.requests.Request())
+    log_info("✅ Loaded service account credentials with access token.")
+else:
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    log_info("✅ Using default application credentials.")
 
 # ===== Internal helpers (non-endpoint) =====
 def _generate_artifacts_from_payload(payload: dict):
