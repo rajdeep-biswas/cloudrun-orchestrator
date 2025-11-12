@@ -124,8 +124,13 @@ def _generate_artifacts_from_payload(payload: dict):
                 zipf.write(full_path, arcname=relative_path)
     log_info(f"🗜️ [helper] Zipped workdir to {zip_filename} ✅")
 
+    log_info("🔐 [helper] Credentials:")
+    log_info(f"Type: {type(credentials)}")
+    log_info(f"Service Account Email: {credentials.service_account_email}")
+    # log_info(f"Token: {credentials.token}")
+
     # --- Upload to GCS ---
-    storage_client = storage.Client()
+    storage_client = storage.Client(credentials=credentials)
     bucket = storage_client.bucket(GCS_TEMP_BUCKET)
     gcs_object = f"workdir_{timestamp}.zip"
     blob = bucket.blob(gcs_object)

@@ -190,13 +190,11 @@ async def inference(request: Request):
         
         # Get Google auth token with Vertex AI scopes
         log_info("🔐 Getting Google authentication token with Vertex AI scopes...")
-        credentials, project = default(scopes=[
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/aiplatform"
-        ])
-        auth_req = AuthRequest()
-        credentials.refresh(auth_req)
+        if not credentials.valid:
+            import google.auth.transport.requests
+            credentials.refresh(google.auth.transport.requests.Request())
         auth_token = credentials.token
+        project = PROJECT_ID
         log_info(f"✅ Auth token obtained (length: {len(auth_token)}, project: {project})")
         
         import json as json_lib
