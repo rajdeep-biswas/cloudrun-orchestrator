@@ -1,7 +1,6 @@
 import os
 import logging
 import tempfile
-import subprocess
 import zipfile
 from datetime import datetime
 import uuid
@@ -11,6 +10,10 @@ from fastapi.responses import JSONResponse
 from jinja2 import Environment, FileSystemLoader
 from google.cloud import bigquery
 from google.cloud import storage
+from google.cloud import aiplatform
+from google.cloud.aiplatform import models
+from google.cloud.devtools import cloudbuild_v1
+
 
 app = FastAPI(title="Prophet Orchestrator")
 router = APIRouter()
@@ -236,7 +239,6 @@ async def generate_and_deploy(request: Request):
         inference_image_name = f"us-central1-docker.pkg.dev/{PROJECT_ID}/prophet/prophet_infer:{timestamp}"
         log_info(f"🏷️ Image tags set — train: {image_name}, infer: {inference_image_name} ✅")
 
-        from google.cloud.devtools import cloudbuild_v1
         client = cloudbuild_v1.services.cloud_build.CloudBuildClient()
         if not gcs_source_uri.startswith("gs://"):
             raise ValueError("Invalid gcs_source_uri, must start with gs://")
@@ -320,48 +322,41 @@ async def generate_and_deploy(request: Request):
         infer_operation.result()
         log_info("🧱 Cloud Build: inference image build finished ✅")
 
+        # Initialize Vertex AI
+        aiplatform.init(project=PROJECT_ID, location=REGION)
+        
         # Create Vertex AI Model
         model_display_name = f"prophet_model_{timestamp}"
-        subprocess.run([
-            "gcloud", "ai", "models", "upload",
-            "--region", REGION,
-            "--display-name", model_display_name,
-            "--container-image-uri", inference_image_name,
-            "--container-ports=8080",
-            "--container-health-route=/",
-            "--container-predict-route=/predict",
-            "--project", PROJECT_ID
-        ], check=True)
-        log_info("🧠 Vertex Model uploaded ✅")
-
-        # Get Model ID
-        model_id = subprocess.check_output([
-            "gcloud", "ai", "models", "list",
-            "--region", REGION,
-            "--filter", f"display_name:{model_display_name}",
-            "--format=value(name)"
-        ]).decode().strip()
-        log_info(f"🆔 Retrieved Model ID: {model_id} ✅")
+        
+        model = models.Model.upload(
+            display_name=model_display_name,
+            serving_container_image_uri=inference_image_name,
+            serving_container_ports=[8080],
+            serving_container_health_route="/",
+            serving_container_predict_route="/predict",
+        )
+        model.wait()
+        model_id = model.resource_name
+        log_info(f"🧠 Vertex Model uploaded ✅ Model ID: {model_id}")
 
         # Create Endpoint
         endpoint_display_name = f"prophet_endpoint_{timestamp}"
-        endpoint_id = subprocess.check_output([
-            "gcloud", "ai", "endpoints", "create",
-            "--region", REGION,
-            "--display-name", endpoint_display_name,
-            "--project", PROJECT_ID,
-            "--format=value(name)"
-        ]).decode().strip()
+        
+        endpoint = aiplatform.Endpoint.create(
+            display_name=endpoint_display_name,
+        )
+        endpoint.wait()
+        endpoint_id = endpoint.resource_name
         log_info(f"📍 Endpoint created: {endpoint_id} ✅")
 
         # Deploy Model to Endpoint
-        subprocess.run([
-            "gcloud", "ai", "endpoints", "deploy-model", endpoint_id,
-            "--region", REGION,
-            "--model", model_id,
-            "--display-name", f"prophet_deploy_{timestamp}",
-            "--traffic-split=0=100"
-        ], check=True)
+        endpoint.deploy(
+            model=model,
+            deployed_model_display_name=f"prophet_deploy_{timestamp}",
+            traffic_percentage=100,
+            machine_type="n1-standard-2",  # Default machine type, adjust as needed
+        )
+        endpoint.wait()
         log_info("🚀 Model deployed to endpoint ✅")
 
         log_info("🦄🎉 /generate_and_deploy completed successfully!")
