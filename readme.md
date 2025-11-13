@@ -6,7 +6,7 @@
 
 # Specify google credentials via file instead of python runtime
 `export GOOGLE_APPLICATION_CREDENTIALS=dev-poc-429118-8cb81dd6266e.json`  
-Use `unset GOOGLE_APPLICATION_CREDENTIALS` if you want to revert to default behavior.
+Use `unset GOOGLE_APPLICATION_CREDENTIALS` if you want to revert to default behavior of using [`cloud auth application-default login`](https://docs.google.com/document/d/1UZHzdlizD4jT-GmGa-Y1F7DGa-k6Who6njT2i_qik4o/edit?tab=t.0).
 
 # Payload for `/generate_and_deploy`
 ```json
