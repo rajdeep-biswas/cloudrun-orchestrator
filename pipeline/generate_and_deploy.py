@@ -41,6 +41,10 @@ PROJECT_ID = "dev-poc-429118"
 REGION = "us-central1"
 GCS_TEMP_BUCKET = "prophet-temp-bucket"  # pre-created bucket for temporary workdirs
 MODEL_REGISTRY_TABLE = "dev-poc-429118.aa_genai.prophet_model_registry"
+TIMESTAMP_COLUMN = "call_start_time_est"
+PROJECT_ID = "dev-poc-429118"
+BQ_TABLE = "dev-poc-429118.aa_genai.call-duration-aphw-aug-sep"
+BUCKET_NAME = "aphw-prophet-models"
 
 # Override default credentials with proper scoped service account
 key_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -148,12 +152,11 @@ def _generate_artifacts_from_payload(payload: dict):
 
 def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_uri: str, train_image_uri: str,
                         inference_image_uri: str, model_display_name: str, model_id: str,
-                        endpoint_display_name: str, endpoint_id: str):
+                        endpoint_display_name: str, endpoint_id: str, run_id: str):
     """
     Persist the orchestrated run metadata into BigQuery.
     """
     bq_client = bigquery.Client(project=PROJECT_ID)
-    run_id = str(uuid.uuid4())
     created_at = datetime.utcnow().isoformat() + "Z"
     train_workdir = gen_artifacts["workdir"]
     train_gcs_source_uri = gen_artifacts["gcs_source_uri"]
@@ -221,6 +224,11 @@ async def generate_and_deploy(request: Request):
         log_info("🦄 Starting /generate_and_deploy — full pipeline kickoff...")
         payload = await request.json()
         log_info("📥 Received payload for full pipeline ✅")
+
+        payload["timestamp_column"] = TIMESTAMP_COLUMN
+        payload["project_id"] = PROJECT_ID
+        payload["bq_table"] = BQ_TABLE
+        payload["bucket_name"] = BUCKET_NAME
 
         # Validate using the superset required for generation (build uses same fields later)
         required_keys = [
@@ -383,6 +391,8 @@ async def generate_and_deploy(request: Request):
         endpoint.wait()
         log_info("🚀 Model deployed to endpoint ✅")
 
+        run_id = str(uuid.uuid4())
+
         log_info("🦄🎉 /generate_and_deploy completed successfully!")
         _store_run_metadata(
             payload,
@@ -394,6 +404,7 @@ async def generate_and_deploy(request: Request):
             model_id=model_id,
             endpoint_display_name=endpoint_display_name,
             endpoint_id=endpoint_id,
+            run_id=run_id
         )
         return {
             "status": "success",
@@ -409,6 +420,7 @@ async def generate_and_deploy(request: Request):
                 "train_image_name": image_name,
                 "inference_image_name": inference_image_name,
             },
+            "run_id": run_id,
             "message": "Artifacts generated and model deployed automatically",
         }
     except Exception as e:
