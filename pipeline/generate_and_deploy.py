@@ -3,6 +3,7 @@ import logging
 import tempfile
 import zipfile
 import asyncio
+import time
 from datetime import datetime
 import uuid
 from fastapi import FastAPI, Request
@@ -209,14 +210,18 @@ def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_
 
 
 def _create_and_wait_endpoint(display_name: str):
-    endpoint = aiplatform.Endpoint.create(
-        display_name=display_name,
-    )
+    log_info(f"📍 Endpoint creation started for display_name={display_name}")
+    start = time.perf_counter()
+    endpoint = aiplatform.Endpoint.create(display_name=display_name)
     endpoint.wait()
+    duration = time.perf_counter() - start
+    log_info(f"📍 Endpoint created in {duration:.2f}s ✅ resource={endpoint.resource_name}")
     return endpoint
 
 
 def _upload_and_wait_model(model_display_name: str, serving_container_image_uri: str):
+    log_info(f"🧠 Vertex Model upload started for display_name={model_display_name}")
+    start = time.perf_counter()
     model = models.Model.upload(
         display_name=model_display_name,
         serving_container_image_uri=serving_container_image_uri,
@@ -225,7 +230,17 @@ def _upload_and_wait_model(model_display_name: str, serving_container_image_uri:
         serving_container_predict_route="/predict",
     )
     model.wait()
+    duration = time.perf_counter() - start
+    log_info(f"🧠 Vertex Model uploaded in {duration:.2f}s ✅ resource={model.resource_name}")
     return model
+
+
+async def _wait_for_build(operation, label: str):
+    start = time.perf_counter()
+    log_info(f"🧱 Cloud Build: {label} waiting for completion...")
+    await asyncio.to_thread(operation.result)
+    duration = time.perf_counter() - start
+    log_info(f"🧱 Cloud Build: {label} finished in {duration:.2f}s ✅")
 
 # ================== API ==================
 @router.get("/")
@@ -373,11 +388,10 @@ async def generate_and_deploy(request: Request):
         log_info("🧱 Cloud Build: inference image build started ⏳")
 
         # Concurrently wait on Cloud Build operations
-        train_build_task = asyncio.create_task(asyncio.to_thread(operation.result))
-        infer_build_task = asyncio.create_task(asyncio.to_thread(infer_operation.result))
+        train_build_task = asyncio.create_task(_wait_for_build(operation, "training build"))
+        infer_build_task = asyncio.create_task(_wait_for_build(infer_operation, "inference image build"))
 
         await infer_build_task
-        log_info("🧱 Cloud Build: inference image build finished ✅")
 
         # Initialize Vertex AI once inference image is available
         aiplatform.init(project=PROJECT_ID, location=REGION)
@@ -385,7 +399,6 @@ async def generate_and_deploy(request: Request):
         endpoint_task = asyncio.create_task(asyncio.to_thread(_create_and_wait_endpoint, endpoint_display_name))
 
         await train_build_task
-        log_info("🧱 Cloud Build: training build finished ✅")
 
         model_display_name = f"prophet_model_{timestamp}"
         model_task = asyncio.create_task(
@@ -394,12 +407,12 @@ async def generate_and_deploy(request: Request):
 
         model = await model_task
         model_id = model.resource_name
-        log_info(f"🧠 Vertex Model uploaded ✅ Model ID: {model_id}")
 
         endpoint = await endpoint_task
         endpoint_id = endpoint.resource_name
-        log_info(f"📍 Endpoint created: {endpoint_id} ✅")
 
+        deploy_start = time.perf_counter()
+        log_info("🚀 Endpoint deployment started")
         await asyncio.to_thread(
             endpoint.deploy,
             model=model,
@@ -407,7 +420,8 @@ async def generate_and_deploy(request: Request):
             traffic_percentage=100,
             machine_type="n1-standard-2",
         )
-        log_info("🚀 Model deployed to endpoint ✅")
+        deploy_duration = time.perf_counter() - deploy_start
+        log_info(f"🚀 Model deployed to endpoint {endpoint_id} in {deploy_duration:.2f}s ✅")
 
         run_id = str(uuid.uuid4())
 
