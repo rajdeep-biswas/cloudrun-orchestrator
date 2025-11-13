@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import zipfile
+import asyncio
 from datetime import datetime
 import uuid
 from fastapi import FastAPI, Request
@@ -206,6 +207,26 @@ def _store_run_metadata(payload: dict, gen_artifacts: dict, *, gcs_infer_source_
         raise RuntimeError(f"BigQuery insert errors: {errors}")
     log_info("📊 Metadata stored in BigQuery ✅")
 
+
+def _create_and_wait_endpoint(display_name: str):
+    endpoint = aiplatform.Endpoint.create(
+        display_name=display_name,
+    )
+    endpoint.wait()
+    return endpoint
+
+
+def _upload_and_wait_model(model_display_name: str, serving_container_image_uri: str):
+    model = models.Model.upload(
+        display_name=model_display_name,
+        serving_container_image_uri=serving_container_image_uri,
+        serving_container_ports=[8080],
+        serving_container_health_route="/",
+        serving_container_predict_route="/predict",
+    )
+    model.wait()
+    return model
+
 # ================== API ==================
 @router.get("/")
 def health_check():
@@ -294,10 +315,8 @@ async def generate_and_deploy(request: Request):
 
         operation = client.create_build(project_id=PROJECT_ID, build=build)
         log_info(f"🧱 Cloud Build: training build started ⏳ name={operation.operation.name}")
-        operation.result()
-        log_info("🧱 Cloud Build: training build finished ✅")
 
-        # Prepare inference source
+        # Prepare inference source while training build runs
         infer_workdir = tempfile.mkdtemp(prefix=f"infer_{timestamp}_")
         inference_template = env.get_template("inference_app_template.py.j2")
         rendered_infer_app = inference_template.render(
@@ -331,7 +350,8 @@ async def generate_and_deploy(request: Request):
                     full_path = os.path.join(root, file)
                     relative_path = os.path.relpath(full_path, infer_workdir)
                     zipf.write(full_path, arcname=relative_path)
-        infer_bucket = storage.Client().bucket(GCS_TEMP_BUCKET)
+        infer_storage_client = storage.Client(credentials=credentials)
+        infer_bucket = infer_storage_client.bucket(GCS_TEMP_BUCKET)
         infer_gcs_object = f"infer_{timestamp}.zip"
         infer_blob = infer_bucket.blob(infer_gcs_object)
         infer_blob.upload_from_filename(infer_zip_filename)
@@ -351,44 +371,42 @@ async def generate_and_deploy(request: Request):
         }
         infer_operation = client.create_build(project_id=PROJECT_ID, build=infer_build)
         log_info("🧱 Cloud Build: inference image build started ⏳")
-        infer_operation.result()
+
+        # Concurrently wait on Cloud Build operations
+        train_build_task = asyncio.create_task(asyncio.to_thread(operation.result))
+        infer_build_task = asyncio.create_task(asyncio.to_thread(infer_operation.result))
+
+        await infer_build_task
         log_info("🧱 Cloud Build: inference image build finished ✅")
 
-        # Initialize Vertex AI
+        # Initialize Vertex AI once inference image is available
         aiplatform.init(project=PROJECT_ID, location=REGION)
-        
-        # Create Vertex AI Model
+        endpoint_display_name = f"prophet_endpoint_{timestamp}"
+        endpoint_task = asyncio.create_task(asyncio.to_thread(_create_and_wait_endpoint, endpoint_display_name))
+
+        await train_build_task
+        log_info("🧱 Cloud Build: training build finished ✅")
+
         model_display_name = f"prophet_model_{timestamp}"
-        
-        model = models.Model.upload(
-            display_name=model_display_name,
-            serving_container_image_uri=inference_image_name,
-            serving_container_ports=[8080],
-            serving_container_health_route="/",
-            serving_container_predict_route="/predict",
+        model_task = asyncio.create_task(
+            asyncio.to_thread(_upload_and_wait_model, model_display_name, inference_image_name)
         )
-        model.wait()
+
+        model = await model_task
         model_id = model.resource_name
         log_info(f"🧠 Vertex Model uploaded ✅ Model ID: {model_id}")
 
-        # Create Endpoint
-        endpoint_display_name = f"prophet_endpoint_{timestamp}"
-        
-        endpoint = aiplatform.Endpoint.create(
-            display_name=endpoint_display_name,
-        )
-        endpoint.wait()
+        endpoint = await endpoint_task
         endpoint_id = endpoint.resource_name
         log_info(f"📍 Endpoint created: {endpoint_id} ✅")
 
-        # Deploy Model to Endpoint
-        endpoint.deploy(
+        await asyncio.to_thread(
+            endpoint.deploy,
             model=model,
             deployed_model_display_name=f"prophet_deploy_{timestamp}",
             traffic_percentage=100,
-            machine_type="n1-standard-2",  # Default machine type, adjust as needed
+            machine_type="n1-standard-2",
         )
-        endpoint.wait()
         log_info("🚀 Model deployed to endpoint ✅")
 
         run_id = str(uuid.uuid4())
